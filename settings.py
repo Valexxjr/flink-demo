@@ -1,3 +1,5 @@
-BOOTSTRAP_SERVERS = ['localhost:9092']
-KAFKA_TOPIC = 'devices'
-OUTPUT_KAFKA_TOPIC = "sums"
+BOOTSTRAP_SERVER = "localhost:9092"
+
+INPUT_KAFKA_TOPIC = "devices"
+OUTPUT_SUM_KAFKA_TOPIC = "sums"
+OUTPUT_AGG_KAFKA_TOPIC = "aggregated_sums"

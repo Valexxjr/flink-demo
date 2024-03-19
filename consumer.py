@@ -1,66 +1,67 @@
 import os
 
-from pyflink.common import Types
+from pyflink.common import WatermarkStrategy
 from pyflink.common.serialization import SimpleStringSchema
 from pyflink.datastream import StreamExecutionEnvironment
-from pyflink.datastream.functions import KeyedProcessFunction
-from pyflink.datastream.connectors.kafka import FlinkKafkaConsumer, FlinkKafkaProducer
-from pyflink.datastream.state import ValueStateDescriptor
+from pyflink.datastream.window import Time, TumblingEventTimeWindows
+from pyflink.datastream.connectors.kafka import (
+    KafkaSink, KafkaSource, KafkaRecordSerializationSchema, DeliveryGuarantee, KafkaOffsetsInitializer
+)
 
-from settings import BOOTSTRAP_SERVERS, KAFKA_TOPIC
-
-class SumProcessFunction(KeyedProcessFunction):
-    def open(self, runtime_context):
-        state_desc = ValueStateDescriptor("sum", Types.INT())
-        self.sum_state = runtime_context.get_state(state_desc)
-
-    def process_element(self, value, ctx: 'KeyedProcessFunction.Context'):
-        current_sum = self.sum_state.value()
-        if current_sum is None:
-            current_sum = 0
-        current_sum += int(value)
-        self.sum_state.update(current_sum)
-        print("wait")
-        ctx.timer_service().register_event_time_timer(ctx.timestamp() + 100000)
-
-    def on_timer(self, timestamp, ctx: 'KeyedProcessFunction.OnTimerContext'):
-        current_sum = self.sum_state.value()
-        if current_sum is not None:
-            ctx.output(str(current_sum))
+from settings import BOOTSTRAP_SERVER, INPUT_KAFKA_TOPIC, OUTPUT_AGG_KAFKA_TOPIC, OUTPUT_SUM_KAFKA_TOPIC
 
 
 def main():
     env = StreamExecutionEnvironment.get_execution_environment()
 
     current_dir = os.path.dirname(os.path.abspath(__file__))
-
     kafka_connector_jar_path = "file:///" + os.path.join(current_dir, "resources", "flink-sql-connector-kafka-3.1.0-1.18.jar")
 
     env.add_jars(kafka_connector_jar_path)
     env.set_parallelism(1)
 
-    # Define Kafka consumer properties
-    kafka_props = {
-        'bootstrap.servers': BOOTSTRAP_SERVERS[0],
-        "group.id": "flink-group",
-        "auto.offset.reset": "latest"
-    }
+    def extract_timestamp(event):
+        return event.timestamp
 
-    # Create Kafka consumer
-    kafka_consumer = FlinkKafkaConsumer(KAFKA_TOPIC, SimpleStringSchema(), kafka_props)
+    watermark_strategy = WatermarkStrategy.for_monotonous_timestamps().with_timestamp_assigner(extract_timestamp)
 
-    # Create Kafka producer
-    kafka_producer = FlinkKafkaProducer("result-topic", SimpleStringSchema(), kafka_props)
+    kafka_source = KafkaSource.builder().set_bootstrap_servers(
+        BOOTSTRAP_SERVER
+    ).set_topics(
+        INPUT_KAFKA_TOPIC
+    ).set_group_id(
+        "flink-group"
+    ).set_starting_offsets(
+        KafkaOffsetsInitializer.latest()
+    ).set_value_only_deserializer(
+        SimpleStringSchema()
+    ).build()
 
-    input_stream = env.add_source(kafka_consumer)
+    input_stream = env.from_source(kafka_source, watermark_strategy, "Kafka Source")
 
-    # Вычисляем сумму каждые 10 секунд
-    sums = input_stream.key_by(lambda x: "key").process(SumProcessFunction())
+    def create_kafka_sink(topic):
+        kafka_sink = KafkaSink.builder().set_bootstrap_servers(
+            BOOTSTRAP_SERVER
+        ).set_record_serializer(
+            KafkaRecordSerializationSchema.builder()
+                .set_topic(topic)
+                .set_value_serialization_schema(SimpleStringSchema())
+                .build()
+        ).set_delivery_guarantee(
+            DeliveryGuarantee.AT_LEAST_ONCE
+        ).build()
+        return kafka_sink
 
-    # Помещаем сумму в новый топик
-    sums.add_sink(kafka_producer)
+    sum_sink = create_kafka_sink(OUTPUT_SUM_KAFKA_TOPIC)
+    agg_sum_sink = create_kafka_sink(OUTPUT_AGG_KAFKA_TOPIC)
 
-    # Запускаем программу
+    sum_func = lambda a, b: str(int(a) + int(b))
+
+    # create flink jobs
+    # tumbling event time window is dividing messages based on timestamps from kafka
+    input_stream.window_all(TumblingEventTimeWindows.of(Time.seconds(10))).reduce(sum_func).sink_to(sum_sink)
+    input_stream.window_all(TumblingEventTimeWindows.of(Time.minutes(1))).reduce(sum_func).sink_to(agg_sum_sink)
+
     env.execute("Flink Kafka Sum")
 
 if __name__ == '__main__':

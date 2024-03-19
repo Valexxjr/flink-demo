@@ -1,9 +1,9 @@
-import threading
-import time
 import random
+import time
+import threading
 
 from kafka import KafkaProducer
-from settings import BOOTSTRAP_SERVERS, KAFKA_TOPIC
+from settings import BOOTSTRAP_SERVER, INPUT_KAFKA_TOPIC
 
 
 class DeviceProducer(threading.Thread):
@@ -25,18 +25,21 @@ class DeviceProducer(threading.Thread):
 
 
 if __name__ == '__main__':
+
+    serialization_func = lambda x: str(x).encode()
+
     config = {
-        'bootstrap_servers': BOOTSTRAP_SERVERS,
-        'key_serializer': lambda key: str(key).encode(),
-        'value_serializer': lambda value: str(value).encode()
+        'bootstrap_servers': BOOTSTRAP_SERVER,
+        'key_serializer': serialization_func,
+        'value_serializer': serialization_func
     }
 
     kafka_producer = KafkaProducer(**config)
 
     stop_event = threading.Event()
     
-    producer1 = DeviceProducer('device1', kafka_producer, KAFKA_TOPIC, stop_event)
-    producer2 = DeviceProducer('device2', kafka_producer, KAFKA_TOPIC, stop_event)
+    producer1 = DeviceProducer('device1', kafka_producer, INPUT_KAFKA_TOPIC, stop_event)
+    producer2 = DeviceProducer('device2', kafka_producer, INPUT_KAFKA_TOPIC, stop_event)
     
     producer1.start()
     producer2.start()
