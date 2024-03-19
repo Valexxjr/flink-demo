@@ -60,7 +60,7 @@ def main():
     # create flink jobs
     # tumbling event time window is dividing messages based on timestamps from kafka
     input_stream.window_all(TumblingEventTimeWindows.of(Time.seconds(10))).reduce(sum_func).sink_to(sum_sink)
-    input_stream.window_all(TumblingEventTimeWindows.of(Time.minutes(1))).reduce(sum_func).sink_to(agg_sum_sink)
+    input_stream.window_all(TumblingEventTimeWindows.of(Time.minutes(15))).reduce(sum_func).sink_to(agg_sum_sink)
 
     env.execute("Flink Kafka Sum")
 
